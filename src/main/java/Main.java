@@ -8,7 +8,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-// import com.dampcake.bencode.Bencode; - available if you need it!
+import com.dampcake.bencode.Bencode;
 
 public class Main {
   private static final Gson gson = new Gson();
@@ -62,6 +62,16 @@ public class Main {
       System.out.println("Tracker URL: " + announce);
       System.out.println("Length: " + length);
       System.out.println("Info Hash: " + hex);
+
+      long pieceLength = (Long) info.get("piece length");
+      byte[] pieces = (byte[]) info.get("pieces");
+      System.out.println("Piece Length: " + pieceLength);
+      System.out.println("Piece Hashes:");
+      for (int i = 0; i < pieces.length; i += 20) {
+        StringBuilder pieceHex = new StringBuilder();
+        for (int j = i; j < i + 20; j++) pieceHex.append(String.format("%02x", pieces[j]));
+        System.out.println(pieceHex);
+      }
     } else {
       System.out.println("Unknown command: " + command);
     }
