@@ -1,6 +1,8 @@
 import com.google.gson.Gson;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 // import com.dampcake.bencode.Bencode; - available if you need it!
 
 public class Main {
@@ -47,6 +49,16 @@ public class Main {
       }
       index[0]++; // skip 'e'
       return list;
+    } else if (c == 'd') {
+      index[0]++; // skip 'd'
+      Map<String, Object> map = new LinkedHashMap<>();
+      while (s.charAt(index[0]) != 'e') {
+        String key = (String) decode(s, index);
+        Object value = decode(s, index);
+        map.put(key, value);
+      }
+      index[0]++; // skip 'e'
+      return map;
     } else if (Character.isDigit(c)) {
       int colon = s.indexOf(':', index[0]);
       int length = Integer.parseInt(s.substring(index[0], colon));
