@@ -7,6 +7,7 @@
  */
 
 import com.google.gson.Gson;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -16,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -142,6 +144,49 @@ public class Main {
         int port = ((peers[i + 4] & 0xFF) << 8) | (peers[i + 5] & 0xFF);
         System.out.printf("%d.%d.%d.%d:%d%n",
             (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, port);
+      }
+    } else if ("handshake".equals(command)) {
+      byte[] data = Files.readAllBytes(Path.of(args[1]));
+      String[] hostPort = args[2].split(":");
+      String host = hostPort[0];
+      int port = Integer.parseInt(hostPort[1]);
+
+      // Compute info hash
+      int[] idx = {0};
+      idx[0]++;
+      int infoStart = -1, infoEnd = -1;
+      while (data[idx[0]] != 'e') {
+        byte[] keyBytes = (byte[]) decodeBytes(data, idx);
+        String key = new String(keyBytes, StandardCharsets.UTF_8);
+        int valueStart = idx[0];
+        decodeBytes(data, idx);
+        if ("info".equals(key)) { infoStart = valueStart; infoEnd = idx[0]; }
+      }
+      byte[] infoHash = sha1Hash(Arrays.copyOfRange(data, infoStart, infoEnd));
+
+      byte[] peerId = new byte[20];
+      new SecureRandom().nextBytes(peerId);
+
+      // Build handshake: 1 + 19 + 8 + 20 + 20 = 68 bytes
+      byte[] handshake = new byte[68];
+      handshake[0] = 19;
+      System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshake, 1, 19);
+      System.arraycopy(infoHash, 0, handshake, 28, 20);
+      System.arraycopy(peerId, 0, handshake, 48, 20);
+
+      try (Socket socket = new Socket(host, port)) {
+        socket.getOutputStream().write(handshake);
+        socket.getOutputStream().flush();
+
+        byte[] response = new byte[68];
+        int read = 0;
+        while (read < 68) {
+          int n = socket.getInputStream().read(response, read, 68 - read);
+          if (n == -1) throw new RuntimeException("Connection closed before full handshake received");
+          read += n;
+        }
+
+        System.out.println("Peer ID: " + toHex(Arrays.copyOfRange(response, 48, 68)));
       }
     } else {
       System.out.println("Unknown command: " + command);
