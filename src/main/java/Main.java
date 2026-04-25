@@ -7,6 +7,8 @@
  */
 
 import com.google.gson.Gson;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -188,6 +190,130 @@ public class Main {
 
         System.out.println("Peer ID: " + toHex(Arrays.copyOfRange(response, 48, 68)));
       }
+    } else if ("download_piece".equals(command)) {
+      String outputPath = args[2];
+      byte[] data = Files.readAllBytes(Path.of(args[3]));
+      int pieceIndex = Integer.parseInt(args[4]);
+
+      // Parse torrent
+      int[] index = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
+      String announce = new String((byte[]) torrent.get("announce"), StandardCharsets.UTF_8);
+      @SuppressWarnings("unchecked")
+      Map<String, Object> info = (Map<String, Object>) torrent.get("info");
+      long totalLength = (Long) info.get("length");
+      long pieceLength = (Long) info.get("piece length");
+      byte[] pieces = (byte[]) info.get("pieces");
+
+      // Compute info hash
+      int[] idx = {0};
+      idx[0]++;
+      int infoStart = -1, infoEnd = -1;
+      while (data[idx[0]] != 'e') {
+        byte[] keyBytes = (byte[]) decodeBytes(data, idx);
+        String key = new String(keyBytes, StandardCharsets.UTF_8);
+        int valueStart = idx[0];
+        decodeBytes(data, idx);
+        if ("info".equals(key)) { infoStart = valueStart; infoEnd = idx[0]; }
+      }
+      byte[] infoHash = sha1Hash(Arrays.copyOfRange(data, infoStart, infoEnd));
+
+      // Get peers from tracker
+      String trackPeerId = "-TR2940-k8hj0wgej6ch";
+      String trackerUrl = announce
+          + "?info_hash=" + urlEncodeBytes(infoHash)
+          + "&peer_id=" + trackPeerId
+          + "&port=6881"
+          + "&uploaded=0"
+          + "&downloaded=0"
+          + "&left=" + totalLength
+          + "&compact=1";
+
+      HttpClient httpClient = HttpClient.newHttpClient();
+      HttpRequest httpReq = HttpRequest.newBuilder().uri(URI.create(trackerUrl)).GET().build();
+      HttpResponse<byte[]> httpResp = httpClient.send(httpReq, HttpResponse.BodyHandlers.ofByteArray());
+
+      int[] ri = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> trackerResp = (Map<String, Object>) decodeBytes(httpResp.body(), ri);
+      byte[] peersBytes = (byte[]) trackerResp.get("peers");
+
+      // Use first peer
+      int peerIpInt = ByteBuffer.wrap(peersBytes, 0, 4).getInt();
+      int peerPort = ((peersBytes[4] & 0xFF) << 8) | (peersBytes[5] & 0xFF);
+      String peerHost = String.format("%d.%d.%d.%d",
+          (peerIpInt >> 24) & 0xFF, (peerIpInt >> 16) & 0xFF,
+          (peerIpInt >> 8) & 0xFF, peerIpInt & 0xFF);
+
+      // Random peer ID
+      byte[] myPeerId = new byte[20];
+      new SecureRandom().nextBytes(myPeerId);
+
+      // Build handshake
+      byte[] handshakeMsg = new byte[68];
+      handshakeMsg[0] = 19;
+      System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshakeMsg, 1, 19);
+      System.arraycopy(infoHash, 0, handshakeMsg, 28, 20);
+      System.arraycopy(myPeerId, 0, handshakeMsg, 48, 20);
+
+      // Actual size of this piece (last piece may be smaller)
+      int numPieces = pieces.length / 20;
+      long actualPieceLen = (pieceIndex == numPieces - 1)
+          ? totalLength - (long) pieceIndex * pieceLength
+          : pieceLength;
+      byte[] pieceData = new byte[(int) actualPieceLen];
+
+      try (Socket socket = new Socket(peerHost, peerPort)) {
+        OutputStream out = socket.getOutputStream();
+        InputStream in = socket.getInputStream();
+
+        out.write(handshakeMsg);
+        out.flush();
+        readFully(in, 68); // discard peer handshake response
+
+        // Wait for bitfield (id=5), skip keep-alives
+        byte[] msg;
+        do { msg = readPeerMessage(in); } while (msg == null);
+
+        // Send interested (id=2)
+        sendPeerMessage(out, 2, new byte[0]);
+
+        // Wait for unchoke (id=1)
+        do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 1);
+
+        // Download piece block by block
+        int blockSize = 16 * 1024;
+        int numBlocks = (int) ((actualPieceLen + blockSize - 1) / blockSize);
+
+        for (int blockIdx = 0; blockIdx < numBlocks; blockIdx++) {
+          int begin = blockIdx * blockSize;
+          int blockLen = (int) Math.min(blockSize, actualPieceLen - begin);
+
+          ByteBuffer reqPayload = ByteBuffer.allocate(12);
+          reqPayload.putInt(pieceIndex);
+          reqPayload.putInt(begin);
+          reqPayload.putInt(blockLen);
+          sendPeerMessage(out, 6, reqPayload.array());
+
+          // Wait for piece message (id=7)
+          byte[] pieceMsg;
+          do { pieceMsg = readPeerMessage(in); } while (pieceMsg == null || pieceMsg[0] != 7);
+
+          // pieceMsg layout: [id(1), index(4), begin(4), data(...)]
+          int dataOffset = ByteBuffer.wrap(pieceMsg, 5, 4).getInt();
+          System.arraycopy(pieceMsg, 9, pieceData, dataOffset, pieceMsg.length - 9);
+        }
+      }
+
+      // Verify piece integrity
+      byte[] expectedHash = Arrays.copyOfRange(pieces, pieceIndex * 20, pieceIndex * 20 + 20);
+      if (!Arrays.equals(expectedHash, sha1Hash(pieceData))) {
+        throw new RuntimeException("Piece hash mismatch for piece " + pieceIndex);
+      }
+
+      Files.write(Path.of(outputPath), pieceData);
+      System.out.println("Piece " + pieceIndex + " downloaded to " + outputPath + ".");
     } else {
       System.out.println("Unknown command: " + command);
     }
@@ -221,6 +347,34 @@ public class Main {
       }
     }
     return sb.toString();
+  }
+
+  static byte[] readFully(InputStream in, int n) throws Exception {
+    byte[] buf = new byte[n];
+    int read = 0;
+    while (read < n) {
+      int r = in.read(buf, read, n - read);
+      if (r == -1) throw new RuntimeException("Unexpected end of stream");
+      read += r;
+    }
+    return buf;
+  }
+
+  static byte[] readPeerMessage(InputStream in) throws Exception {
+    byte[] lenBuf = readFully(in, 4);
+    int length = ByteBuffer.wrap(lenBuf).getInt();
+    if (length == 0) return null; // keep-alive
+    return readFully(in, length);
+  }
+
+  static void sendPeerMessage(OutputStream out, int id, byte[] payload) throws Exception {
+    int payloadLen = payload != null ? payload.length : 0;
+    ByteBuffer buf = ByteBuffer.allocate(4 + 1 + payloadLen);
+    buf.putInt(1 + payloadLen);
+    buf.put((byte) id);
+    if (payloadLen > 0) buf.put(payload);
+    out.write(buf.array());
+    out.flush();
   }
 
   /**
