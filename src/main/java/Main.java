@@ -314,6 +314,123 @@ public class Main {
 
       Files.write(Path.of(outputPath), pieceData);
       System.out.println("Piece " + pieceIndex + " downloaded to " + outputPath + ".");
+    } else if ("download".equals(command)) {
+      String outputPath = args[2];
+      byte[] data = Files.readAllBytes(Path.of(args[3]));
+
+      // Parse torrent
+      int[] index = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
+      String announce = new String((byte[]) torrent.get("announce"), StandardCharsets.UTF_8);
+      @SuppressWarnings("unchecked")
+      Map<String, Object> info = (Map<String, Object>) torrent.get("info");
+      long totalLength = (Long) info.get("length");
+      long pieceLength = (Long) info.get("piece length");
+      byte[] pieces = (byte[]) info.get("pieces");
+
+      // Compute info hash
+      int[] idx = {0};
+      idx[0]++;
+      int infoStart = -1, infoEnd = -1;
+      while (data[idx[0]] != 'e') {
+        byte[] keyBytes = (byte[]) decodeBytes(data, idx);
+        String key = new String(keyBytes, StandardCharsets.UTF_8);
+        int valueStart = idx[0];
+        decodeBytes(data, idx);
+        if ("info".equals(key)) { infoStart = valueStart; infoEnd = idx[0]; }
+      }
+      byte[] infoHash = sha1Hash(Arrays.copyOfRange(data, infoStart, infoEnd));
+
+      // Get peers from tracker
+      String trackPeerId = "-TR2940-k8hj0wgej6ch";
+      String trackerUrl = announce
+          + "?info_hash=" + urlEncodeBytes(infoHash)
+          + "&peer_id=" + trackPeerId
+          + "&port=6881&uploaded=0&downloaded=0&left=" + totalLength + "&compact=1";
+      HttpClient httpClient = HttpClient.newHttpClient();
+      HttpRequest httpReq = HttpRequest.newBuilder().uri(URI.create(trackerUrl)).GET().build();
+      HttpResponse<byte[]> httpResp = httpClient.send(httpReq, HttpResponse.BodyHandlers.ofByteArray());
+      int[] ri = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> trackerResp = (Map<String, Object>) decodeBytes(httpResp.body(), ri);
+      byte[] peersBytes = (byte[]) trackerResp.get("peers");
+
+      int peerIpInt = ByteBuffer.wrap(peersBytes, 0, 4).getInt();
+      int peerPort = ((peersBytes[4] & 0xFF) << 8) | (peersBytes[5] & 0xFF);
+      String peerHost = String.format("%d.%d.%d.%d",
+          (peerIpInt >> 24) & 0xFF, (peerIpInt >> 16) & 0xFF,
+          (peerIpInt >> 8) & 0xFF, peerIpInt & 0xFF);
+
+      byte[] myPeerId = new byte[20];
+      new SecureRandom().nextBytes(myPeerId);
+
+      byte[] handshakeMsg = new byte[68];
+      handshakeMsg[0] = 19;
+      System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshakeMsg, 1, 19);
+      System.arraycopy(infoHash, 0, handshakeMsg, 28, 20);
+      System.arraycopy(myPeerId, 0, handshakeMsg, 48, 20);
+
+      int numPieces = pieces.length / 20;
+      byte[] fileData = new byte[(int) totalLength];
+
+      try (Socket socket = new Socket(peerHost, peerPort)) {
+        OutputStream out = socket.getOutputStream();
+        InputStream in = socket.getInputStream();
+
+        out.write(handshakeMsg);
+        out.flush();
+        readFully(in, 68); // discard peer handshake
+
+        // Wait for bitfield (id=5)
+        byte[] msg;
+        do { msg = readPeerMessage(in); } while (msg == null);
+
+        // Send interested (id=2)
+        sendPeerMessage(out, 2, new byte[0]);
+
+        // Wait for unchoke (id=1)
+        do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 1);
+
+        // Download every piece
+        for (int pi = 0; pi < numPieces; pi++) {
+          long actualPieceLen = (pi == numPieces - 1)
+              ? totalLength - (long) pi * pieceLength
+              : pieceLength;
+
+          byte[] pieceData = new byte[(int) actualPieceLen];
+          int blockSize = 16 * 1024;
+          int numBlocks = (int) ((actualPieceLen + blockSize - 1) / blockSize);
+
+          for (int blockIdx = 0; blockIdx < numBlocks; blockIdx++) {
+            int begin = blockIdx * blockSize;
+            int blockLen = (int) Math.min(blockSize, actualPieceLen - begin);
+
+            ByteBuffer reqPayload = ByteBuffer.allocate(12);
+            reqPayload.putInt(pi);
+            reqPayload.putInt(begin);
+            reqPayload.putInt(blockLen);
+            sendPeerMessage(out, 6, reqPayload.array());
+
+            byte[] pieceMsg;
+            do { pieceMsg = readPeerMessage(in); } while (pieceMsg == null || pieceMsg[0] != 7);
+
+            int dataOffset = ByteBuffer.wrap(pieceMsg, 5, 4).getInt();
+            System.arraycopy(pieceMsg, 9, pieceData, dataOffset, pieceMsg.length - 9);
+          }
+
+          // Verify piece integrity
+          byte[] expectedHash = Arrays.copyOfRange(pieces, pi * 20, pi * 20 + 20);
+          if (!Arrays.equals(expectedHash, sha1Hash(pieceData))) {
+            throw new RuntimeException("Piece hash mismatch for piece " + pi);
+          }
+
+          System.arraycopy(pieceData, 0, fileData, (int) ((long) pi * pieceLength), (int) actualPieceLen);
+        }
+      }
+
+      Files.write(Path.of(outputPath), fileData);
+      System.out.println("Downloaded " + args[3] + " to " + outputPath + ".");
     } else {
       System.out.println("Unknown command: " + command);
     }
