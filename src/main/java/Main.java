@@ -9,7 +9,7 @@ public class Main {
     String command = args[0];
     if("decode".equals(command)) {
        String bencodedValue = args[1];
-       String decoded;
+       Object decoded;
        try {
          decoded = decodeBencode(bencodedValue);
        } catch(RuntimeException e) {
@@ -24,7 +24,7 @@ public class Main {
 
   }
 
-  static String decodeBencode(String bencodedString) {
+  static Object decodeBencode(String bencodedString) {
     if (Character.isDigit(bencodedString.charAt(0))) {
       int firstColonIndex = 0;
       for(int i = 0; i < bencodedString.length(); i++) { 
@@ -35,6 +35,9 @@ public class Main {
       }
       int length = Integer.parseInt(bencodedString.substring(0, firstColonIndex));
       return bencodedString.substring(firstColonIndex+1, firstColonIndex+1+length);
+    } else if (bencodedString.charAt(0) == 'i') {
+      int endIndex = bencodedString.indexOf('e');
+      return Long.parseLong(bencodedString.substring(1, endIndex));
     } else {
       throw new RuntimeException("Only strings are supported at the moment");
     }
