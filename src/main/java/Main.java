@@ -1,4 +1,17 @@
+/**
+ * Java implementation of BitTorrent from CodeCrafters
+ * 
+ * @author DJ Leamen
+ * @version 1.0
+ * @since 2026-04
+ */
+
 import com.google.gson.Gson;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,6 +26,13 @@ import com.dampcake.bencode.Bencode;
 public class Main {
   private static final Gson gson = new Gson();
 
+  /** 
+   * Main method to run the program. Supports two commands:
+   * 1. decode <bencoded_string>: Decodes the provided bencoded string and prints the result as JSON.
+   * 2. info <torrent_file_path>: Parses the provided .torrent file, extracts and prints the tracker URL, total length, info hash, piece length, and piece hashes.
+   * @param args Command-line arguments. The first argument is the command ("decode" or "info"), followed by the necessary parameters for that command.
+   * @throws Exception if there are issues reading the file, decoding the bencoded data, or computing the hash.
+   */
   public static void main(String[] args) throws Exception {
     
     String command = args[0];
@@ -30,7 +50,7 @@ public class Main {
     } else if ("info".equals(command)) {
       byte[] data = Files.readAllBytes(Path.of(args[1]));
 
-      // Parse full torrent for announce/length
+      // Parse full torrent
       int[] index = {0};
       @SuppressWarnings("unchecked")
       Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
@@ -39,9 +59,9 @@ public class Main {
       Map<String, Object> info = (Map<String, Object>) torrent.get("info");
       long length = (Long) info.get("length");
 
-      // Find the raw bytes of the info value by re-scanning the outer dict
+      // Find raw bytes
       int[] idx = {0};
-      idx[0]++; // skip outer 'd'
+      idx[0]++;
       int infoStart = -1, infoEnd = -1;
       while (data[idx[0]] != 'e') {
         byte[] keyBytes = (byte[]) decodeBytes(data, idx);
@@ -54,10 +74,8 @@ public class Main {
         }
       }
       byte[] infoBytes = Arrays.copyOfRange(data, infoStart, infoEnd);
-      MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
-      byte[] hash = sha1.digest(infoBytes);
-      StringBuilder hex = new StringBuilder();
-      for (byte b : hash) hex.append(String.format("%02x", b));
+      byte[] hash = sha1Hash(infoBytes);
+      String hex = toHex(hash);
 
       System.out.println("Tracker URL: " + announce);
       System.out.println("Length: " + length);
@@ -72,18 +90,111 @@ public class Main {
         for (int j = i; j < i + 20; j++) pieceHex.append(String.format("%02x", pieces[j]));
         System.out.println(pieceHex);
       }
+    } else if ("peers".equals(command)) {
+      byte[] data = Files.readAllBytes(Path.of(args[1]));
+
+      // Parse torrent
+      int[] index = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
+      String announce = new String((byte[]) torrent.get("announce"), StandardCharsets.UTF_8);
+      @SuppressWarnings("unchecked")
+      Map<String, Object> info = (Map<String, Object>) torrent.get("info");
+      long length = (Long) info.get("length");
+
+      // Compute info hash
+      int[] idx = {0};
+      idx[0]++;
+      int infoStart = -1, infoEnd = -1;
+      while (data[idx[0]] != 'e') {
+        byte[] keyBytes = (byte[]) decodeBytes(data, idx);
+        String key = new String(keyBytes, StandardCharsets.UTF_8);
+        int valueStart = idx[0];
+        decodeBytes(data, idx);
+        if ("info".equals(key)) { infoStart = valueStart; infoEnd = idx[0]; }
+      }
+      byte[] infoHash = sha1Hash(Arrays.copyOfRange(data, infoStart, infoEnd));
+
+      // Build tracker URL
+      String peerId = "-TR2940-k8hj0wgej6ch";
+      String url = announce
+          + "?info_hash=" + urlEncodeBytes(infoHash)
+          + "&peer_id=" + peerId
+          + "&port=6881"
+          + "&uploaded=0"
+          + "&downloaded=0"
+          + "&left=" + length
+          + "&compact=1";
+
+      // GET request
+      HttpClient client = HttpClient.newHttpClient();
+      HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
+      HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+      byte[] body = response.body();
+
+      // Parse response
+      int[] ri = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> resp = (Map<String, Object>) decodeBytes(body, ri);
+      byte[] peers = (byte[]) resp.get("peers");
+      for (int i = 0; i < peers.length; i += 6) {
+        int ip = ByteBuffer.wrap(peers, i, 4).getInt();
+        int port = ((peers[i + 4] & 0xFF) << 8) | (peers[i + 5] & 0xFF);
+        System.out.printf("%d.%d.%d.%d:%d%n",
+            (ip >> 24) & 0xFF, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, port);
+      }
     } else {
       System.out.println("Unknown command: " + command);
     }
 
   }
 
+  /** 
+   * Computes the SHA-1 hash of the given data.
+   * This is used to compute the info hash from the raw bencoded info dictionary.
+   * @param data The data to hash.
+   * @return The SHA-1 hash of the data.
+   */
+  static byte[] sha1Hash(byte[] data) throws Exception {
+    return MessageDigest.getInstance("SHA-1").digest(data);
+  }
+
+  static String toHex(byte[] bytes) {
+    StringBuilder sb = new StringBuilder();
+    for (byte b : bytes) sb.append(String.format("%02x", b));
+    return sb.toString();
+  }
+
+  static String urlEncodeBytes(byte[] bytes) {
+    StringBuilder sb = new StringBuilder();
+    for (byte b : bytes) {
+      if ((b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9')
+          || b == '-' || b == '_' || b == '.' || b == '~') {
+        sb.append((char) b);
+      } else {
+        sb.append(String.format("%%%02X", b & 0xFF));
+      }
+    }
+    return sb.toString();
+  }
+
+  /**
+   * Decodes a bencoded string and returns the corresponding Java object. This is a wrapper around the decode method that initializes the index.
+   * @param bencodedString The bencoded string to decode.
+   * @return The decoded Java object.
+   */
   static Object decodeBencode(String bencodedString) {
     int[] index = {0};
     return decode(bencodedString, index);
   }
 
-  // Byte-array based decoder — returns byte[] for bencoded strings (preserves binary data)
+  /** 
+   * Decodes a bencoded byte array starting from the given index. Returns the decoded object and updates the index to the position after the parsed value.
+   * Supports integers, lists, dictionaries, and byte strings. For dictionaries, keys are decoded as UTF-8 strings.
+   * @param data The bencoded byte array.
+   * @param index The current index in the byte array. This will be updated to the position after the parsed value.
+   * @return The decoded object.
+   */
   static Object decodeBytes(byte[] data, int[] index) {
     byte c = data[index[0]];
     if (c == 'i') {
@@ -125,31 +236,39 @@ public class Main {
     }
   }
 
+  /** 
+   * Decodes a bencoded string starting from the given index. Returns the decoded object and updates the index to the position after the parsed value.
+   * Supports integers, lists, dictionaries, and byte strings. For dictionaries, keys are decoded
+   * @param s The bencoded string to decode.
+   * @param index The current index in the string. This will be updated to the position after the parsed value.
+   * @return Object The decoded Java object corresponding to the bencoded value at the given index. This can be a Long for integers, a List for lists, a Map for dictionaries, or a String for byte strings.
+   * @throws RuntimeException if the bencoded string contains an unsupported type or is malformed.
+   */
   static Object decode(String s, int[] index) {
     char c = s.charAt(index[0]);
     if (c == 'i') {
-      index[0]++; // skip 'i'
+      index[0]++;
       int end = s.indexOf('e', index[0]);
       long val = Long.parseLong(s.substring(index[0], end));
-      index[0] = end + 1; // skip past 'e'
+      index[0] = end + 1;
       return val;
     } else if (c == 'l') {
-      index[0]++; // skip 'l'
+      index[0]++;
       List<Object> list = new ArrayList<>();
       while (s.charAt(index[0]) != 'e') {
         list.add(decode(s, index));
       }
-      index[0]++; // skip 'e'
+      index[0]++;
       return list;
     } else if (c == 'd') {
-      index[0]++; // skip 'd'
+      index[0]++;
       Map<String, Object> map = new LinkedHashMap<>();
       while (s.charAt(index[0]) != 'e') {
         String key = (String) decode(s, index);
         Object value = decode(s, index);
         map.put(key, value);
       }
-      index[0]++; // skip 'e'
+      index[0]++;
       return map;
     } else if (Character.isDigit(c)) {
       int colon = s.indexOf(':', index[0]);
