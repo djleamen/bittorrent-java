@@ -1,4 +1,6 @@
 import com.google.gson.Gson;
+import java.util.ArrayList;
+import java.util.List;
 // import com.dampcake.bencode.Bencode; - available if you need it!
 
 public class Main {
@@ -25,19 +27,33 @@ public class Main {
   }
 
   static Object decodeBencode(String bencodedString) {
-    if (Character.isDigit(bencodedString.charAt(0))) {
-      int firstColonIndex = 0;
-      for(int i = 0; i < bencodedString.length(); i++) { 
-        if(bencodedString.charAt(i) == ':') {
-          firstColonIndex = i;
-          break;
-        }
+    int[] index = {0};
+    return decode(bencodedString, index);
+  }
+
+  static Object decode(String s, int[] index) {
+    char c = s.charAt(index[0]);
+    if (c == 'i') {
+      index[0]++; // skip 'i'
+      int end = s.indexOf('e', index[0]);
+      long val = Long.parseLong(s.substring(index[0], end));
+      index[0] = end + 1; // skip past 'e'
+      return val;
+    } else if (c == 'l') {
+      index[0]++; // skip 'l'
+      List<Object> list = new ArrayList<>();
+      while (s.charAt(index[0]) != 'e') {
+        list.add(decode(s, index));
       }
-      int length = Integer.parseInt(bencodedString.substring(0, firstColonIndex));
-      return bencodedString.substring(firstColonIndex+1, firstColonIndex+1+length);
-    } else if (bencodedString.charAt(0) == 'i') {
-      int endIndex = bencodedString.indexOf('e');
-      return Long.parseLong(bencodedString.substring(1, endIndex));
+      index[0]++; // skip 'e'
+      return list;
+    } else if (Character.isDigit(c)) {
+      int colon = s.indexOf(':', index[0]);
+      int length = Integer.parseInt(s.substring(index[0], colon));
+      index[0] = colon + 1;
+      String str = s.substring(index[0], index[0] + length);
+      index[0] += length;
+      return str;
     } else {
       throw new RuntimeException("Only strings are supported at the moment");
     }
