@@ -2,6 +2,7 @@ import com.google.gson.Gson;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -28,6 +29,8 @@ public class Main {
 
     } else if ("info".equals(command)) {
       byte[] data = Files.readAllBytes(Path.of(args[1]));
+
+      // Parse full torrent for announce/length
       int[] index = {0};
       @SuppressWarnings("unchecked")
       Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
@@ -35,8 +38,30 @@ public class Main {
       @SuppressWarnings("unchecked")
       Map<String, Object> info = (Map<String, Object>) torrent.get("info");
       long length = (Long) info.get("length");
+
+      // Find the raw bytes of the info value by re-scanning the outer dict
+      int[] idx = {0};
+      idx[0]++; // skip outer 'd'
+      int infoStart = -1, infoEnd = -1;
+      while (data[idx[0]] != 'e') {
+        byte[] keyBytes = (byte[]) decodeBytes(data, idx);
+        String key = new String(keyBytes, StandardCharsets.UTF_8);
+        int valueStart = idx[0];
+        decodeBytes(data, idx);
+        if ("info".equals(key)) {
+          infoStart = valueStart;
+          infoEnd = idx[0];
+        }
+      }
+      byte[] infoBytes = Arrays.copyOfRange(data, infoStart, infoEnd);
+      MessageDigest sha1 = MessageDigest.getInstance("SHA-1");
+      byte[] hash = sha1.digest(infoBytes);
+      StringBuilder hex = new StringBuilder();
+      for (byte b : hash) hex.append(String.format("%02x", b));
+
       System.out.println("Tracker URL: " + announce);
       System.out.println("Length: " + length);
+      System.out.println("Info Hash: " + hex);
     } else {
       System.out.println("Unknown command: " + command);
     }
