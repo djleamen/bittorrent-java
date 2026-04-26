@@ -493,6 +493,10 @@ public class Main {
         byte[] peerHandshake = readFully(in, 68);
         System.out.println("Peer ID: " + toHex(Arrays.copyOfRange(peerHandshake, 48, 68)));
 
+        // Wait for bitfield message (id=5), skip keep-alives and other messages
+        byte[] msg;
+        do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 5);
+
         // Check if peer supports extensions (bit 20 from right = peerHandshake[25] & 0x10)
         if ((peerHandshake[25] & 0x10) != 0) {
           // Send extension handshake: msg id=20, ext id=0, payload=bencoded {"m":{"ut_metadata":1}}
@@ -505,8 +509,19 @@ public class Main {
           out.write(extBuf.array());
           out.flush();
 
+          // Receive extension handshake response (msg id=20, ext id=0)
           byte[] extMsg;
           do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
+
+          // extMsg[0]=20 (ext msg id), extMsg[1]=0 (handshake), extMsg[2..] = bencoded dict
+          byte[] extPayload = Arrays.copyOfRange(extMsg, 2, extMsg.length);
+          int[] ei = {0};
+          @SuppressWarnings("unchecked")
+          Map<String, Object> extHandshake = (Map<String, Object>) decodeBytes(extPayload, ei);
+          @SuppressWarnings("unchecked")
+          Map<String, Object> mDict = (Map<String, Object>) extHandshake.get("m");
+          long utMetadataId = ((Number) mDict.get("ut_metadata")).longValue();
+          System.out.println("Peer Metadata Extension ID: " + utMetadataId);
         }
       }
     } else if ("magnet_parse".equals(command)) {
