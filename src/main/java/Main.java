@@ -490,8 +490,24 @@ public class Main {
         InputStream in = socket.getInputStream();
         out.write(handshakeMsg);
         out.flush();
-        byte[] response = readFully(in, 68);
-        System.out.println("Peer ID: " + toHex(Arrays.copyOfRange(response, 48, 68)));
+        byte[] peerHandshake = readFully(in, 68);
+        System.out.println("Peer ID: " + toHex(Arrays.copyOfRange(peerHandshake, 48, 68)));
+
+        // Check if peer supports extensions (bit 20 from right = peerHandshake[25] & 0x10)
+        if ((peerHandshake[25] & 0x10) != 0) {
+          // Send extension handshake: msg id=20, ext id=0, payload=bencoded {"m":{"ut_metadata":1}}
+          byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
+          ByteBuffer extBuf = ByteBuffer.allocate(4 + 1 + 1 + extDict.length);
+          extBuf.putInt(1 + 1 + extDict.length);
+          extBuf.put((byte) 20); // msg id = 20 (extension)
+          extBuf.put((byte) 0);  // ext msg id = 0 (handshake)
+          extBuf.put(extDict);
+          out.write(extBuf.array());
+          out.flush();
+
+          byte[] extMsg;
+          do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
+        }
       }
     } else if ("magnet_parse".equals(command)) {
       String magnetLink = args[1];
