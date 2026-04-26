@@ -431,6 +431,25 @@ public class Main {
 
       Files.write(Path.of(outputPath), fileData);
       System.out.println("Downloaded " + args[3] + " to " + outputPath + ".");
+    } else if ("magnet_parse".equals(command)) {
+      String magnetLink = args[1];
+      // Strip "magnet:?" prefix
+      String query = magnetLink.startsWith("magnet:?") ? magnetLink.substring(8) : magnetLink;
+      String infoHash = null;
+      String trackerUrl = null;
+      for (String param : query.split("&")) {
+        int eq = param.indexOf('=');
+        if (eq == -1) continue;
+        String key = param.substring(0, eq);
+        String value = java.net.URLDecoder.decode(param.substring(eq + 1), StandardCharsets.UTF_8);
+        if ("xt".equals(key) && value.startsWith("urn:btih:")) {
+          infoHash = value.substring("urn:btih:".length());
+        } else if ("tr".equals(key)) {
+          trackerUrl = value;
+        }
+      }
+      if (trackerUrl != null) System.out.println("Tracker URL: " + trackerUrl);
+      if (infoHash != null) System.out.println("Info Hash: " + infoHash);
     } else {
       System.out.println("Unknown command: " + command);
     }
