@@ -431,6 +431,68 @@ public class Main {
 
       Files.write(Path.of(outputPath), fileData);
       System.out.println("Downloaded " + args[3] + " to " + outputPath + ".");
+    } else if ("magnet_handshake".equals(command)) {
+      String magnetLink = args[1];
+      String query = magnetLink.startsWith("magnet:?") ? magnetLink.substring(8) : magnetLink;
+      String infoHashHex = null;
+      String trackerUrl = null;
+      for (String param : query.split("&")) {
+        int eq = param.indexOf('=');
+        if (eq == -1) continue;
+        String key = param.substring(0, eq);
+        String value = java.net.URLDecoder.decode(param.substring(eq + 1), StandardCharsets.UTF_8);
+        if ("xt".equals(key) && value.startsWith("urn:btih:")) {
+          infoHashHex = value.substring("urn:btih:".length());
+        } else if ("tr".equals(key)) {
+          trackerUrl = value;
+        }
+      }
+
+      byte[] infoHash = new byte[20];
+      for (int i = 0; i < 20; i++) {
+        infoHash[i] = (byte) Integer.parseInt(infoHashHex.substring(i * 2, i * 2 + 2), 16);
+      }
+
+      long left = 999;
+      String trackPeerId = "-TR2940-k8hj0wgej6ch";
+      String tUrl = trackerUrl
+          + "?info_hash=" + urlEncodeBytes(infoHash)
+          + "&peer_id=" + trackPeerId
+          + "&port=6881&uploaded=0&downloaded=0&left=" + left + "&compact=1";
+      HttpClient httpClient = HttpClient.newHttpClient();
+      HttpRequest httpReq = HttpRequest.newBuilder().uri(URI.create(tUrl)).GET().build();
+      HttpResponse<byte[]> httpResp = httpClient.send(httpReq, HttpResponse.BodyHandlers.ofByteArray());
+      int[] ri = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> trackerResp = (Map<String, Object>) decodeBytes(httpResp.body(), ri);
+      byte[] peersBytes = (byte[]) trackerResp.get("peers");
+
+      int peerIpInt = ByteBuffer.wrap(peersBytes, 0, 4).getInt();
+      int peerPort = ((peersBytes[4] & 0xFF) << 8) | (peersBytes[5] & 0xFF);
+      String peerHost = String.format("%d.%d.%d.%d",
+          (peerIpInt >> 24) & 0xFF, (peerIpInt >> 16) & 0xFF,
+          (peerIpInt >> 8) & 0xFF, peerIpInt & 0xFF);
+
+      byte[] myPeerId = new byte[20];
+      new SecureRandom().nextBytes(myPeerId);
+
+      // Build handshake with extension bit: bit 20 from right = reserved[5] |= 0x10
+      byte[] handshakeMsg = new byte[68];
+      handshakeMsg[0] = 19;
+      System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshakeMsg, 1, 19);
+      // reserved bytes at [20..27], set bit 20 from right: byte index 5 (from left), bit 4
+      handshakeMsg[25] = 0x10;
+      System.arraycopy(infoHash, 0, handshakeMsg, 28, 20);
+      System.arraycopy(myPeerId, 0, handshakeMsg, 48, 20);
+
+      try (Socket socket = new Socket(peerHost, peerPort)) {
+        OutputStream out = socket.getOutputStream();
+        InputStream in = socket.getInputStream();
+        out.write(handshakeMsg);
+        out.flush();
+        byte[] response = readFully(in, 68);
+        System.out.println("Peer ID: " + toHex(Arrays.copyOfRange(response, 48, 68)));
+      }
     } else if ("magnet_parse".equals(command)) {
       String magnetLink = args[1];
       // Strip "magnet:?" prefix
