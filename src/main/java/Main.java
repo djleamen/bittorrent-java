@@ -55,7 +55,6 @@ public class Main {
     } else if ("info".equals(command)) {
       byte[] data = Files.readAllBytes(Path.of(args[1]));
 
-      // Parse full torrent
       int[] index = {0};
       @SuppressWarnings("unchecked")
       Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
@@ -64,7 +63,6 @@ public class Main {
       Map<String, Object> info = (Map<String, Object>) torrent.get("info");
       long length = (Long) info.get("length");
 
-      // Find raw bytes
       int[] idx = {0};
       idx[0]++;
       int infoStart = -1, infoEnd = -1;
@@ -107,7 +105,6 @@ public class Main {
       Map<String, Object> info = (Map<String, Object>) torrent.get("info");
       long length = (Long) info.get("length");
 
-      // Compute info hash
       int[] idx = {0};
       idx[0]++;
       int infoStart = -1, infoEnd = -1;
@@ -120,7 +117,6 @@ public class Main {
       }
       byte[] infoHash = sha1Hash(Arrays.copyOfRange(data, infoStart, infoEnd));
 
-      // Build tracker URL
       String peerId = "-TR2940-k8hj0wgej6ch";
       String url = announce
           + "?info_hash=" + urlEncodeBytes(infoHash)
@@ -131,13 +127,10 @@ public class Main {
           + "&left=" + length
           + "&compact=1";
 
-      // GET request
       HttpClient client = HttpClient.newHttpClient();
       HttpRequest request = HttpRequest.newBuilder().uri(URI.create(url)).GET().build();
       HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
       byte[] body = response.body();
-
-      // Parse response
       int[] ri = {0};
       @SuppressWarnings("unchecked")
       Map<String, Object> resp = (Map<String, Object>) decodeBytes(body, ri);
@@ -154,7 +147,6 @@ public class Main {
       String host = hostPort[0];
       int port = Integer.parseInt(hostPort[1]);
 
-      // Compute info hash
       int[] idx = {0};
       idx[0]++;
       int infoStart = -1, infoEnd = -1;
@@ -196,7 +188,6 @@ public class Main {
       byte[] data = Files.readAllBytes(Path.of(args[3]));
       int pieceIndex = Integer.parseInt(args[4]);
 
-      // Parse torrent
       int[] index = {0};
       @SuppressWarnings("unchecked")
       Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
@@ -207,7 +198,6 @@ public class Main {
       long pieceLength = (Long) info.get("piece length");
       byte[] pieces = (byte[]) info.get("pieces");
 
-      // Compute info hash
       int[] idx = {0};
       idx[0]++;
       int infoStart = -1, infoEnd = -1;
@@ -220,7 +210,6 @@ public class Main {
       }
       byte[] infoHash = sha1Hash(Arrays.copyOfRange(data, infoStart, infoEnd));
 
-      // Get peers from tracker
       String trackPeerId = "-TR2940-k8hj0wgej6ch";
       String trackerUrl = announce
           + "?info_hash=" + urlEncodeBytes(infoHash)
@@ -240,18 +229,15 @@ public class Main {
       Map<String, Object> trackerResp = (Map<String, Object>) decodeBytes(httpResp.body(), ri);
       byte[] peersBytes = (byte[]) trackerResp.get("peers");
 
-      // Use first peer
       int peerIpInt = ByteBuffer.wrap(peersBytes, 0, 4).getInt();
       int peerPort = ((peersBytes[4] & 0xFF) << 8) | (peersBytes[5] & 0xFF);
       String peerHost = String.format("%d.%d.%d.%d",
           (peerIpInt >> 24) & 0xFF, (peerIpInt >> 16) & 0xFF,
           (peerIpInt >> 8) & 0xFF, peerIpInt & 0xFF);
 
-      // Random peer ID
       byte[] myPeerId = new byte[20];
       new SecureRandom().nextBytes(myPeerId);
 
-      // Build handshake
       byte[] handshakeMsg = new byte[68];
       handshakeMsg[0] = 19;
       System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshakeMsg, 1, 19);
@@ -273,17 +259,13 @@ public class Main {
         out.flush();
         readFully(in, 68); // discard peer handshake response
 
-        // Wait for bitfield (id=5), skip keep-alives
         byte[] msg;
         do { msg = readPeerMessage(in); } while (msg == null);
 
-        // Send interested (id=2)
         sendPeerMessage(out, 2, new byte[0]);
 
-        // Wait for unchoke (id=1)
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 1);
 
-        // Download piece block by block
         int blockSize = 16 * 1024;
         int numBlocks = (int) ((actualPieceLen + blockSize - 1) / blockSize);
 
@@ -297,7 +279,6 @@ public class Main {
           reqPayload.putInt(blockLen);
           sendPeerMessage(out, 6, reqPayload.array());
 
-          // Wait for piece message (id=7)
           byte[] pieceMsg;
           do { pieceMsg = readPeerMessage(in); } while (pieceMsg == null || pieceMsg[0] != 7);
 
@@ -307,7 +288,6 @@ public class Main {
         }
       }
 
-      // Verify piece integrity
       byte[] expectedHash = Arrays.copyOfRange(pieces, pieceIndex * 20, pieceIndex * 20 + 20);
       if (!Arrays.equals(expectedHash, sha1Hash(pieceData))) {
         throw new RuntimeException("Piece hash mismatch for piece " + pieceIndex);
@@ -319,7 +299,6 @@ public class Main {
       String outputPath = args[2];
       byte[] data = Files.readAllBytes(Path.of(args[3]));
 
-      // Parse torrent
       int[] index = {0};
       @SuppressWarnings("unchecked")
       Map<String, Object> torrent = (Map<String, Object>) decodeBytes(data, index);
@@ -330,7 +309,6 @@ public class Main {
       long pieceLength = (Long) info.get("piece length");
       byte[] pieces = (byte[]) info.get("pieces");
 
-      // Compute info hash
       int[] idx = {0};
       idx[0]++;
       int infoStart = -1, infoEnd = -1;
@@ -343,7 +321,6 @@ public class Main {
       }
       byte[] infoHash = sha1Hash(Arrays.copyOfRange(data, infoStart, infoEnd));
 
-      // Get peers from tracker
       String trackPeerId = "-TR2940-k8hj0wgej6ch";
       String trackerUrl = announce
           + "?info_hash=" + urlEncodeBytes(infoHash)
@@ -383,17 +360,13 @@ public class Main {
         out.flush();
         readFully(in, 68); // discard peer handshake
 
-        // Wait for bitfield (id=5)
         byte[] msg;
         do { msg = readPeerMessage(in); } while (msg == null);
 
-        // Send interested (id=2)
         sendPeerMessage(out, 2, new byte[0]);
 
-        // Wait for unchoke (id=1)
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 1);
 
-        // Download every piece
         for (int pi = 0; pi < numPieces; pi++) {
           long actualPieceLen = (pi == numPieces - 1)
               ? totalLength - (long) pi * pieceLength
@@ -420,7 +393,6 @@ public class Main {
             System.arraycopy(pieceMsg, 9, pieceData, dataOffset, pieceMsg.length - 9);
           }
 
-          // Verify piece integrity
           byte[] expectedHash = Arrays.copyOfRange(pieces, pi * 20, pi * 20 + 20);
           if (!Arrays.equals(expectedHash, sha1Hash(pieceData))) {
             throw new RuntimeException("Piece hash mismatch for piece " + pi);
@@ -494,11 +466,9 @@ public class Main {
         byte[] peerHandshake = readFully(in, 68);
         System.out.println("Peer ID: " + toHex(Arrays.copyOfRange(peerHandshake, 48, 68)));
 
-        // Wait for bitfield message (id=5), skip keep-alives and other messages
         byte[] msg;
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 5);
 
-        // Check if peer supports extensions (bit 20 from right = peerHandshake[25] & 0x10)
         if ((peerHandshake[25] & 0x10) != 0) {
           // Send extension handshake: msg id=20, ext id=0, payload=bencoded {"m":{"ut_metadata":1}}
           byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
@@ -510,7 +480,6 @@ public class Main {
           out.write(extBuf.array());
           out.flush();
 
-          // Receive extension handshake response (msg id=20, ext id=0)
           byte[] extMsg;
           do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
 
@@ -570,7 +539,6 @@ public class Main {
       byte[] myPeerId = new byte[20];
       new SecureRandom().nextBytes(myPeerId);
 
-      // Build handshake with extension bit
       byte[] handshakeMsg = new byte[68];
       handshakeMsg[0] = 19;
       System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshakeMsg, 1, 19);
@@ -585,12 +553,10 @@ public class Main {
         out.flush();
         byte[] peerHandshake = readFully(in, 68);
 
-        // Wait for bitfield message (id=5)
         byte[] msg;
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 5);
 
         if ((peerHandshake[25] & 0x10) != 0) {
-          // Send extension handshake
           byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
           ByteBuffer extBuf = ByteBuffer.allocate(4 + 1 + 1 + extDict.length);
           extBuf.putInt(1 + 1 + extDict.length);
@@ -600,7 +566,6 @@ public class Main {
           out.write(extBuf.array());
           out.flush();
 
-          // Receive extension handshake response
           byte[] extMsg;
           do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
 
@@ -612,8 +577,6 @@ public class Main {
           Map<String, Object> mDict = (Map<String, Object>) extHandshake.get("m");
           long utMetadataId = ((Number) mDict.get("ut_metadata")).longValue();
 
-          // Send metadata request message
-          // {'msg_type': 0, 'piece': 0}
           byte[] metaReqDict = "d8:msg_typei0e5:piecei0ee".getBytes(StandardCharsets.US_ASCII);
           ByteBuffer metaReqBuf = ByteBuffer.allocate(4 + 1 + 1 + metaReqDict.length);
           metaReqBuf.putInt(1 + 1 + metaReqDict.length);
@@ -623,7 +586,6 @@ public class Main {
           out.write(metaReqBuf.array());
           out.flush();
 
-          // Receive metadata data message
           byte[] metaDataMsg;
           do { metaDataMsg = readPeerMessage(in); } while (metaDataMsg == null || metaDataMsg[0] != 20 || metaDataMsg[1] != 1);
 
@@ -713,7 +675,6 @@ public class Main {
         out.flush();
         byte[] peerHandshake = readFully(in, 68);
 
-        // Wait for bitfield (id=5)
         byte[] msg;
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 5);
 
@@ -721,7 +682,6 @@ public class Main {
           throw new RuntimeException("Peer does not support extensions");
         }
 
-        // Send extension handshake
         byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
         ByteBuffer extBuf = ByteBuffer.allocate(4 + 1 + 1 + extDict.length);
         extBuf.putInt(1 + 1 + extDict.length);
@@ -731,7 +691,6 @@ public class Main {
         out.write(extBuf.array());
         out.flush();
 
-        // Receive extension handshake response
         byte[] extMsg;
         do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
 
@@ -743,7 +702,6 @@ public class Main {
         Map<String, Object> mDict = (Map<String, Object>) extHandshake.get("m");
         long utMetadataId = ((Number) mDict.get("ut_metadata")).longValue();
 
-        // Request metadata piece 0
         byte[] metaReqDict = "d8:msg_typei0e5:piecei0ee".getBytes(StandardCharsets.US_ASCII);
         ByteBuffer metaReqBuf = ByteBuffer.allocate(4 + 1 + 1 + metaReqDict.length);
         metaReqBuf.putInt(1 + 1 + metaReqDict.length);
@@ -753,7 +711,6 @@ public class Main {
         out.write(metaReqBuf.array());
         out.flush();
 
-        // Receive metadata
         byte[] metaDataMsg;
         do { metaDataMsg = readPeerMessage(in); } while (metaDataMsg == null || metaDataMsg[0] != 20 || metaDataMsg[1] != 1);
 
@@ -770,13 +727,10 @@ public class Main {
         long pieceLength = (Long) info.get("piece length");
         byte[] pieces = (byte[]) info.get("pieces");
 
-        // Send interested
         sendPeerMessage(out, 2, new byte[0]);
 
-        // Wait for unchoke
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 1);
 
-        // Download piece
         int numPieces = pieces.length / 20;
         long actualPieceLen = (pieceIndex == numPieces - 1)
             ? totalLength - (long) pieceIndex * pieceLength
@@ -803,7 +757,6 @@ public class Main {
           System.arraycopy(pieceMsg, 9, pieceData, dataOffset, pieceMsg.length - 9);
         }
 
-        // Verify piece
         byte[] expectedHash = Arrays.copyOfRange(pieces, pieceIndex * 20, pieceIndex * 20 + 20);
         if (!Arrays.equals(expectedHash, sha1Hash(pieceData))) {
           throw new RuntimeException("Piece hash mismatch for piece " + pieceIndex);
@@ -874,7 +827,6 @@ public class Main {
         out.flush();
         byte[] peerHandshake = readFully(in, 68);
 
-        // Wait for bitfield (id=5)
         byte[] msg;
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 5);
 
@@ -882,7 +834,6 @@ public class Main {
           throw new RuntimeException("Peer does not support extensions");
         }
 
-        // Send extension handshake
         byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
         ByteBuffer extBuf = ByteBuffer.allocate(4 + 1 + 1 + extDict.length);
         extBuf.putInt(1 + 1 + extDict.length);
@@ -892,7 +843,6 @@ public class Main {
         out.write(extBuf.array());
         out.flush();
 
-        // Receive extension handshake response
         byte[] extMsg;
         do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
 
@@ -904,7 +854,6 @@ public class Main {
         Map<String, Object> mDict = (Map<String, Object>) extHandshake.get("m");
         long utMetadataId = ((Number) mDict.get("ut_metadata")).longValue();
 
-        // Request metadata piece 0
         byte[] metaReqDict = "d8:msg_typei0e5:piecei0ee".getBytes(StandardCharsets.US_ASCII);
         ByteBuffer metaReqBuf = ByteBuffer.allocate(4 + 1 + 1 + metaReqDict.length);
         metaReqBuf.putInt(1 + 1 + metaReqDict.length);
@@ -914,7 +863,6 @@ public class Main {
         out.write(metaReqBuf.array());
         out.flush();
 
-        // Receive metadata
         byte[] metaDataMsg;
         do { metaDataMsg = readPeerMessage(in); } while (metaDataMsg == null || metaDataMsg[0] != 20 || metaDataMsg[1] != 1);
 
@@ -931,10 +879,8 @@ public class Main {
         long pieceLength = (Long) info.get("piece length");
         byte[] pieces = (byte[]) info.get("pieces");
 
-        // Send interested
         sendPeerMessage(out, 2, new byte[0]);
 
-        // Wait for unchoke
         do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 1);
 
         int numPieces = pieces.length / 20;
@@ -966,7 +912,6 @@ public class Main {
             System.arraycopy(pieceMsg, 9, pieceData, dataOffset, pieceMsg.length - 9);
           }
 
-          // Verify piece integrity
           byte[] expectedHash = Arrays.copyOfRange(pieces, pi * 20, pi * 20 + 20);
           if (!Arrays.equals(expectedHash, sha1Hash(pieceData))) {
             throw new RuntimeException("Piece hash mismatch for piece " + pi);
@@ -980,7 +925,6 @@ public class Main {
       }
     } else if ("magnet_parse".equals(command)) {
       String magnetLink = args[1];
-      // Strip "magnet:?" prefix
       String query = magnetLink.startsWith("magnet:?") ? magnetLink.substring(8) : magnetLink;
       String infoHash = null;
       String trackerUrl = null;
