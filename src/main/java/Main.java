@@ -621,6 +621,32 @@ public class Main {
           metaReqBuf.put(metaReqDict);
           out.write(metaReqBuf.array());
           out.flush();
+
+          // Receive metadata data message
+          byte[] metaDataMsg;
+          do { metaDataMsg = readPeerMessage(in); } while (metaDataMsg == null || metaDataMsg[0] != 20 || metaDataMsg[1] != 1);
+
+          int[] metaIdx = {2};
+          @SuppressWarnings("unchecked")
+          Map<String, Object> metaDict = (Map<String, Object>) decodeBytes(metaDataMsg, metaIdx);
+
+          byte[] infoBytes = Arrays.copyOfRange(metaDataMsg, metaIdx[0], metaDataMsg.length);
+
+          int[] infoIdx = {0};
+          @SuppressWarnings("unchecked")
+          Map<String, Object> info = (Map<String, Object>) decodeBytes(infoBytes, infoIdx);
+
+          System.out.println("Tracker URL: " + trackerUrl);
+          System.out.println("Length: " + info.get("length"));
+          System.out.println("Info Hash: " + toHex(sha1Hash(infoBytes)));
+          System.out.println("Piece Length: " + info.get("piece length"));
+          System.out.println("Piece Hashes:");
+          byte[] pieces = (byte[]) info.get("pieces");
+          for (int i = 0; i < pieces.length; i += 20) {
+            StringBuilder pieceHex = new StringBuilder();
+            for (int j = i; j < i + 20; j++) pieceHex.append(String.format("%02x", pieces[j]));
+            System.out.println(pieceHex);
+          }
         }
       }
     } else if ("magnet_parse".equals(command)) {
