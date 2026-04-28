@@ -524,6 +524,105 @@ public class Main {
           System.out.println("Peer Metadata Extension ID: " + utMetadataId);
         }
       }
+    } else if ("magnet_info".equals(command)) {
+      String magnetLink = args[1];
+      String query = magnetLink.startsWith("magnet:?") ? magnetLink.substring(8) : magnetLink;
+      String infoHashHex = null;
+      String trackerUrl = null;
+      for (String param : query.split("&")) {
+        int eq = param.indexOf('=');
+        if (eq == -1) continue;
+        String key = param.substring(0, eq);
+        String value = java.net.URLDecoder.decode(param.substring(eq + 1), StandardCharsets.UTF_8);
+        if ("xt".equals(key) && value.startsWith("urn:btih:")) {
+          infoHashHex = value.substring("urn:btih:".length());
+        } else if ("tr".equals(key)) {
+          trackerUrl = value;
+        }
+      }
+
+      byte[] infoHash = new byte[20];
+      for (int i = 0; i < 20; i++) {
+        infoHash[i] = (byte) Integer.parseInt(infoHashHex.substring(i * 2, i * 2 + 2), 16);
+      }
+
+      long left = 999;
+      String trackPeerId = "-TR2940-k8hj0wgej6ch";
+      String tUrl = trackerUrl
+          + "?info_hash=" + urlEncodeBytes(infoHash)
+          + "&peer_id=" + trackPeerId
+          + "&port=6881&uploaded=0&downloaded=0&left=" + left + "&compact=1";
+      HttpClient httpClient = HttpClient.newHttpClient();
+      HttpRequest httpReq = HttpRequest.newBuilder().uri(URI.create(tUrl)).GET().build();
+      HttpResponse<byte[]> httpResp = httpClient.send(httpReq, HttpResponse.BodyHandlers.ofByteArray());
+      int[] ri = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> trackerResp = (Map<String, Object>) decodeBytes(httpResp.body(), ri);
+      byte[] peersBytes = (byte[]) trackerResp.get("peers");
+
+      int peerIpInt = ByteBuffer.wrap(peersBytes, 0, 4).getInt();
+      int peerPort = ((peersBytes[4] & 0xFF) << 8) | (peersBytes[5] & 0xFF);
+      String peerHost = String.format("%d.%d.%d.%d",
+          (peerIpInt >> 24) & 0xFF, (peerIpInt >> 16) & 0xFF,
+          (peerIpInt >> 8) & 0xFF, peerIpInt & 0xFF);
+
+      byte[] myPeerId = new byte[20];
+      new SecureRandom().nextBytes(myPeerId);
+
+      // Build handshake with extension bit
+      byte[] handshakeMsg = new byte[68];
+      handshakeMsg[0] = 19;
+      System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshakeMsg, 1, 19);
+      handshakeMsg[25] = 0x10;
+      System.arraycopy(infoHash, 0, handshakeMsg, 28, 20);
+      System.arraycopy(myPeerId, 0, handshakeMsg, 48, 20);
+
+      try (Socket socket = new Socket(peerHost, peerPort)) {
+        OutputStream out = socket.getOutputStream();
+        InputStream in = socket.getInputStream();
+        out.write(handshakeMsg);
+        out.flush();
+        byte[] peerHandshake = readFully(in, 68);
+
+        // Wait for bitfield message (id=5)
+        byte[] msg;
+        do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 5);
+
+        if ((peerHandshake[25] & 0x10) != 0) {
+          // Send extension handshake
+          byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
+          ByteBuffer extBuf = ByteBuffer.allocate(4 + 1 + 1 + extDict.length);
+          extBuf.putInt(1 + 1 + extDict.length);
+          extBuf.put((byte) 20);
+          extBuf.put((byte) 0);
+          extBuf.put(extDict);
+          out.write(extBuf.array());
+          out.flush();
+
+          // Receive extension handshake response
+          byte[] extMsg;
+          do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
+
+          byte[] extPayload = Arrays.copyOfRange(extMsg, 2, extMsg.length);
+          int[] ei = {0};
+          @SuppressWarnings("unchecked")
+          Map<String, Object> extHandshake = (Map<String, Object>) decodeBytes(extPayload, ei);
+          @SuppressWarnings("unchecked")
+          Map<String, Object> mDict = (Map<String, Object>) extHandshake.get("m");
+          long utMetadataId = ((Number) mDict.get("ut_metadata")).longValue();
+
+          // Send metadata request message
+          // {'msg_type': 0, 'piece': 0}
+          byte[] metaReqDict = "d8:msg_typei0e5:piecei0ee".getBytes(StandardCharsets.US_ASCII);
+          ByteBuffer metaReqBuf = ByteBuffer.allocate(4 + 1 + 1 + metaReqDict.length);
+          metaReqBuf.putInt(1 + 1 + metaReqDict.length);
+          metaReqBuf.put((byte) 20);
+          metaReqBuf.put((byte) utMetadataId);
+          metaReqBuf.put(metaReqDict);
+          out.write(metaReqBuf.array());
+          out.flush();
+        }
+      }
     } else if ("magnet_parse".equals(command)) {
       String magnetLink = args[1];
       // Strip "magnet:?" prefix
