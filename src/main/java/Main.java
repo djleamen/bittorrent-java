@@ -28,9 +28,17 @@ import java.util.List;
 import java.util.Map;
 import com.dampcake.bencode.Bencode;
 
+
 public class Main {
+  /** Gson instance used for serializing decoded bencode values to JSON output. */
   private static final Gson gson = new Gson();
 
+  /** 
+   * The main method serves as the entry point for the application. 
+   * 
+   * @param args The command-line arguments. The first argument is the command to execute, followed by command-specific parameters.
+   * @throws Exception if any error occurs during execution, such as network errors, file I/O errors, or malformed input.
+   */
   public static void main(String[] args) throws Exception {
 
     String command = args[0];
@@ -376,9 +384,12 @@ public class Main {
     }
   }
 
-  // ── Shared helpers ────────────────────────────────────────────────────────
-
-  /** Walks the outer bencoded dictionary to find and return the raw bytes of the "info" value. */
+  /**
+   * Extracts the raw bencoded info dictionary bytes from the torrent file data. 
+   * 
+   * @param torrentData The raw bytes of the torrent file. This should be the entire content of the .torrent file read as a byte array.
+   * @return byte[] The raw bencoded info dictionary bytes, which can be used to compute the info hash or to parse the info dictionary fields.
+   */
   static byte[] extractInfoBytes(byte[] torrentData) {
     int[] idx = {1}; // skip opening 'd'
     int infoStart = -1, infoEnd = -1;
@@ -395,7 +406,12 @@ public class Main {
     return Arrays.copyOfRange(torrentData, infoStart, infoEnd);
   }
 
-  /** Parses a magnet link and returns {infoHashHex, trackerUrl}. */
+  /** 
+   * Parses a magnet link and returns {infoHashHex, trackerUrl}. 
+   * 
+   * @param magnetLink The magnet link to parse. It should be in the format "magnet:?xt=urn:btih:<infoHashHex>&tr=<trackerUrl>".
+   * @return String[] A string array where the first element is the info hash in hexadecimal and the second element is the tracker URL. If a component is missing, its value will be null.
+   * */
   static String[] parseMagnetLink(String magnetLink) throws Exception {
     String query = magnetLink.startsWith("magnet:?") ? magnetLink.substring(8) : magnetLink;
     String infoHashHex = null, trackerUrl = null;
@@ -413,7 +429,15 @@ public class Main {
     return new String[]{infoHashHex, trackerUrl};
   }
 
-  /** Queries the tracker and returns the compact peers bytes. */
+  /** 
+   * Queries the tracker and returns the compact peers bytes. 
+   * 
+   * @param trackerUrl The URL of the tracker to query.
+   * @param infoHash The info hash of the torrent.
+   * @param left The number of bytes left to download.
+   * @return byte[] The compact peers bytes returned by the tracker.
+   * @throws Exception If an error occurs while querying the tracker.
+   */
   static byte[] queryTracker(String trackerUrl, byte[] infoHash, long left) throws Exception {
     String peerId = "-TR2940-k8hj0wgej6ch";
     String url = trackerUrl
@@ -429,7 +453,12 @@ public class Main {
     return (byte[]) trackerResp.get("peers");
   }
 
-  /** Returns {host, port} of the first peer in a compact peers list. */
+  /** 
+   * Returns {host, port} of the first peer in a compact peers list.
+   * 
+   * @param peersBytes The compact peers bytes returned by the tracker.
+   * @return String[] A string array where the first element is the host and the second element is the port.
+   */
   static String[] firstPeerAddress(byte[] peersBytes) {
     int peerIpInt = ByteBuffer.wrap(peersBytes, 0, 4).getInt();
     int peerPort = ((peersBytes[4] & 0xFF) << 8) | (peersBytes[5] & 0xFF);
@@ -439,7 +468,12 @@ public class Main {
     return new String[]{peerHost, String.valueOf(peerPort)};
   }
 
-  /** Converts a hex string to a byte array. */
+  /** 
+   * Converts a hex string to a byte array. 
+   * 
+   * @param hex The hex string to convert.
+   * @return byte[] The byte array representation of the hex string.
+   */
   static byte[] hexToBytes(String hex) {
     byte[] bytes = new byte[hex.length() / 2];
     for (int i = 0; i < bytes.length; i++) {
@@ -448,7 +482,14 @@ public class Main {
     return bytes;
   }
 
-  /** Builds a 68-byte BitTorrent handshake. Set extension=true to advertise BEP-10 support. */
+  /** 
+   * Builds a 68-byte BitTorrent handshake. Set extension=true to advertise BEP-10 support.
+   * 
+   * @param infoHash The info hash of the torrent.
+   * @param peerId The peer ID to use in the handshake.
+   * @param extension Whether to advertise BEP-10 support.
+   * @return byte[] The 68-byte BitTorrent handshake message.
+   */
   static byte[] buildHandshake(byte[] infoHash, byte[] peerId, boolean extension) {
     byte[] msg = new byte[68];
     msg[0] = 19;
@@ -459,7 +500,14 @@ public class Main {
     return msg;
   }
 
-  /** Performs the BEP-10 extension handshake and returns the peer's ut_metadata extension ID. */
+  /** 
+   * Performs the BEP-10 extension handshake and returns the peer's ut_metadata extension ID.
+   * 
+   * @param in The input stream to read the extension handshake from.
+   * @param out The output stream to send the extension handshake to.
+   * @return long The peer's ut_metadata extension ID.
+   * @throws Exception If an error occurs during the extension handshake.
+   */
   static long performExtensionHandshake(InputStream in, OutputStream out) throws Exception {
     byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
     ByteBuffer extBuf = ByteBuffer.allocate(4 + 1 + 1 + extDict.length);
@@ -482,7 +530,15 @@ public class Main {
     return ((Number) mDict.get("ut_metadata")).longValue();
   }
 
-  /** Fetches the info dictionary bytes from the peer using the ut_metadata extension. */
+  /** 
+   * Fetches the info dictionary bytes from the peer using the ut_metadata extension.
+   * 
+   * @param in The input stream to read the metadata from.
+   * @param out The output stream to send the metadata request to.
+   * @param utMetadataId The peer's ut_metadata extension ID.
+   * @return byte[] The info dictionary bytes.
+   * @throws Exception If an error occurs while fetching the metadata.
+   */
   static byte[] fetchMetadata(InputStream in, OutputStream out, long utMetadataId) throws Exception {
     byte[] metaReqDict = "d8:msg_typei0e5:piecei0ee".getBytes(StandardCharsets.US_ASCII);
     ByteBuffer metaReqBuf = ByteBuffer.allocate(4 + 1 + 1 + metaReqDict.length);
@@ -502,7 +558,16 @@ public class Main {
     return Arrays.copyOfRange(metaDataMsg, metaIdx[0], metaDataMsg.length);
   }
 
-  /** Downloads a single piece by requesting all its blocks sequentially. */
+  /** 
+   * Downloads a single piece by requesting all its blocks sequentially.
+   * 
+   * @param in The input stream to read the piece data from.
+   * @param out The output stream to send the piece requests to.
+   * @param pieceIndex The index of the piece to download.
+   * @param actualPieceLen The length of the piece in bytes.
+   * @return byte[] The downloaded piece data.
+   * @throws Exception If an error occurs while downloading the piece.
+   */
   static byte[] downloadPiece(InputStream in, OutputStream out, int pieceIndex, long actualPieceLen) throws Exception {
     byte[] pieceData = new byte[(int) actualPieceLen];
     int blockSize = 16 * 1024;
@@ -525,22 +590,38 @@ public class Main {
     return pieceData;
   }
 
-  /** 
+  /**
    * Computes the SHA-1 hash of the given data.
-   * This is used to compute the info hash from the raw bencoded info dictionary.
+   *
    * @param data The data to hash.
-   * @return The SHA-1 hash of the data.
+   * @return byte[] The SHA-1 hash of the data.
+   * @throws Exception If an error occurs while computing the hash.
    */
   static byte[] sha1Hash(byte[] data) throws Exception {
     return MessageDigest.getInstance("SHA-1").digest(data);
   }
 
+  /** 
+   * Converts a byte array to a hex string. 
+   * This is used for displaying the info hash and piece hashes in a human-readable format.
+   *
+   * @param bytes The byte array to convert.
+   * @return String The hex string representation of the byte array.
+   */
   static String toHex(byte[] bytes) {
     StringBuilder sb = new StringBuilder();
     for (byte b : bytes) sb.append(String.format("%02x", b));
     return sb.toString();
   }
 
+  /** 
+   * URL-encodes a byte array according to the BitTorrent specification. 
+   * Alphanumeric characters and -_.~ are not percent-encoded, while all 
+   * other bytes are encoded as %XX.
+   * 
+   * @param bytes The byte array to URL-encode.
+   * @return String The URL-encoded string representation of the byte array.
+   */
   static String urlEncodeBytes(byte[] bytes) {
     StringBuilder sb = new StringBuilder();
     for (byte b : bytes) {
@@ -554,6 +635,15 @@ public class Main {
     return sb.toString();
   }
 
+  /** 
+   * Reads exactly n bytes from the input stream. If the stream ends before n bytes are read, throws an exception.
+   * This is used to read the fixed-length handshake and peer messages from the socket.
+   * 
+   * @param in The input stream to read from.
+   * @param n The number of bytes to read.
+   * @return byte[] A byte array containing the n bytes read from the input stream.
+   * @throws Exception If an error occurs while reading from the input stream or if the end of the stream is reached before n bytes are read.
+   */
   static byte[] readFully(InputStream in, int n) throws Exception {
     byte[] buf = new byte[n];
     int read = 0;
@@ -565,6 +655,14 @@ public class Main {
     return buf;
   }
 
+  /** 
+   * Reads a peer message from the input stream. First reads 4 bytes to determine the message length, then reads the full message. If the length is 0, returns null to indicate a keep-alive message.
+   * This is used to read messages from the peer after the handshake.
+   * 
+   * @param in The input stream to read from.
+   * @return byte[] A byte array containing the peer message, or null if it's a keep-alive message.
+   * @throws Exception If an error occurs while reading from the input stream or if the end of the stream is reached unexpectedly.
+   */
   static byte[] readPeerMessage(InputStream in) throws Exception {
     byte[] lenBuf = readFully(in, 4);
     int length = ByteBuffer.wrap(lenBuf).getInt();
@@ -572,6 +670,15 @@ public class Main {
     return readFully(in, length);
   }
 
+  /** 
+   * Sends a peer message with the given ID and payload. The message is prefixed with a 4-byte length and a 1-byte message ID, followed by the payload.
+   * This is used to send messages to the peer after the handshake.
+   * 
+   * @param out The output stream to write the message to.
+   * @param id The message ID to send. This should be a value between 0 and 255 that identifies the type of message being sent.
+   * @param payload The payload of the message as a byte array. This can be null or empty if the message has no payload.
+   * @throws Exception If an error occurs while writing to the output stream.
+   */
   static void sendPeerMessage(OutputStream out, int id, byte[] payload) throws Exception {
     int payloadLen = payload != null ? payload.length : 0;
     ByteBuffer buf = ByteBuffer.allocate(4 + 1 + payloadLen);
@@ -583,21 +690,25 @@ public class Main {
   }
 
   /**
-   * Decodes a bencoded string and returns the corresponding Java object. This is a wrapper around the decode method that initializes the index.
+   * Decodes a bencoded string and returns the corresponding Java object.
+   * This is a convenience wrapper around {@link #decode(String, int[])} that initializes the index.
+   *
    * @param bencodedString The bencoded string to decode.
-   * @return The decoded Java object.
+   * @return Object The decoded Java object (Long for integers, List for lists, Map for dictionaries, String for byte strings).
    */
   static Object decodeBencode(String bencodedString) {
     int[] index = {0};
     return decode(bencodedString, index);
   }
 
-  /** 
-   * Decodes a bencoded byte array starting from the given index. Returns the decoded object and updates the index to the position after the parsed value.
+  /**
+   * Decodes a bencoded byte array starting from the given index.
+   * Returns the decoded object and updates the index to the position after the parsed value.
    * Supports integers, lists, dictionaries, and byte strings. For dictionaries, keys are decoded as UTF-8 strings.
-   * @param data The bencoded byte array.
-   * @param index The current index in the byte array. This will be updated to the position after the parsed value.
-   * @return The decoded object.
+   *
+   * @param data  The bencoded byte array.
+   * @param index The current index in the byte array; updated to the position after the parsed value.
+   * @return Object The decoded object (Long for integers, List for lists, Map for dictionaries, byte[] for byte strings).
    */
   static Object decodeBytes(byte[] data, int[] index) {
     byte c = data[index[0]];
@@ -640,13 +751,15 @@ public class Main {
     }
   }
 
-  /** 
-   * Decodes a bencoded string starting from the given index. Returns the decoded object and updates the index to the position after the parsed value.
-   * Supports integers, lists, dictionaries, and byte strings. For dictionaries, keys are decoded
-   * @param s The bencoded string to decode.
-   * @param index The current index in the string. This will be updated to the position after the parsed value.
-   * @return Object The decoded Java object corresponding to the bencoded value at the given index. This can be a Long for integers, a List for lists, a Map for dictionaries, or a String for byte strings.
-   * @throws RuntimeException if the bencoded string contains an unsupported type or is malformed.
+  /**
+   * Decodes a bencoded string starting from the given index.
+   * Returns the decoded object and updates the index to the position after the parsed value.
+   * Supports integers, lists, dictionaries, and byte strings. For dictionaries, keys are decoded as strings.
+   *
+   * @param s     The bencoded string to decode.
+   * @param index The current index in the string; updated to the position after the parsed value.
+   * @return Object The decoded Java object (Long for integers, List for lists, Map for dictionaries, String for byte strings).
+   * @throws RuntimeException If the bencoded string contains an unsupported type or is malformed.
    */
   static Object decode(String s, int[] index) {
     char c = s.charAt(index[0]);
