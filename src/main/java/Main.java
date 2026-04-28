@@ -649,6 +649,168 @@ public class Main {
           }
         }
       }
+    } else if ("magnet_download_piece".equals(command)) {
+      String outputPath = args[2];
+      String magnetLink = args[3];
+      int pieceIndex = Integer.parseInt(args[4]);
+      
+      String query = magnetLink.startsWith("magnet:?") ? magnetLink.substring(8) : magnetLink;
+      String infoHashHex = null;
+      String trackerUrl = null;
+      for (String param : query.split("&")) {
+        int eq = param.indexOf('=');
+        if (eq == -1) continue;
+        String key = param.substring(0, eq);
+        String value = java.net.URLDecoder.decode(param.substring(eq + 1), StandardCharsets.UTF_8);
+        if ("xt".equals(key) && value.startsWith("urn:btih:")) {
+          infoHashHex = value.substring("urn:btih:".length());
+        } else if ("tr".equals(key)) {
+          trackerUrl = value;
+        }
+      }
+
+      byte[] infoHash = new byte[20];
+      for (int i = 0; i < 20; i++) {
+        infoHash[i] = (byte) Integer.parseInt(infoHashHex.substring(i * 2, i * 2 + 2), 16);
+      }
+
+      long left = 999;
+      String trackPeerId = "-TR2940-k8hj0wgej6ch";
+      String tUrl = trackerUrl
+          + "?info_hash=" + urlEncodeBytes(infoHash)
+          + "&peer_id=" + trackPeerId
+          + "&port=6881&uploaded=0&downloaded=0&left=" + left + "&compact=1";
+      HttpClient httpClient = HttpClient.newHttpClient();
+      HttpRequest httpReq = HttpRequest.newBuilder().uri(URI.create(tUrl)).GET().build();
+      HttpResponse<byte[]> httpResp = httpClient.send(httpReq, HttpResponse.BodyHandlers.ofByteArray());
+      
+      int[] ri = {0};
+      @SuppressWarnings("unchecked")
+      Map<String, Object> trackerResp = (Map<String, Object>) decodeBytes(httpResp.body(), ri);
+      byte[] peersBytes = (byte[]) trackerResp.get("peers");
+
+      int peerIpInt = ByteBuffer.wrap(peersBytes, 0, 4).getInt();
+      int peerPort = ((peersBytes[4] & 0xFF) << 8) | (peersBytes[5] & 0xFF);
+      String peerHost = String.format("%d.%d.%d.%d",
+          (peerIpInt >> 24) & 0xFF, (peerIpInt >> 16) & 0xFF,
+          (peerIpInt >> 8) & 0xFF, peerIpInt & 0xFF);
+
+      byte[] myPeerId = new byte[20];
+      new SecureRandom().nextBytes(myPeerId);
+
+      byte[] handshakeMsg = new byte[68];
+      handshakeMsg[0] = 19;
+      System.arraycopy("BitTorrent protocol".getBytes(StandardCharsets.US_ASCII), 0, handshakeMsg, 1, 19);
+      handshakeMsg[25] = 0x10; // Supports extension
+      System.arraycopy(infoHash, 0, handshakeMsg, 28, 20);
+      System.arraycopy(myPeerId, 0, handshakeMsg, 48, 20);
+
+      try (Socket socket = new Socket(peerHost, peerPort)) {
+        OutputStream out = socket.getOutputStream();
+        InputStream in = socket.getInputStream();
+        out.write(handshakeMsg);
+        out.flush();
+        byte[] peerHandshake = readFully(in, 68);
+
+        // Wait for bitfield (id=5)
+        byte[] msg;
+        do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 5);
+
+        if ((peerHandshake[25] & 0x10) == 0) {
+          throw new RuntimeException("Peer does not support extensions");
+        }
+
+        // Send extension handshake
+        byte[] extDict = "d1:md11:ut_metadatai1eee".getBytes(StandardCharsets.US_ASCII);
+        ByteBuffer extBuf = ByteBuffer.allocate(4 + 1 + 1 + extDict.length);
+        extBuf.putInt(1 + 1 + extDict.length);
+        extBuf.put((byte) 20);
+        extBuf.put((byte) 0);
+        extBuf.put(extDict);
+        out.write(extBuf.array());
+        out.flush();
+
+        // Receive extension handshake response
+        byte[] extMsg;
+        do { extMsg = readPeerMessage(in); } while (extMsg == null || extMsg[0] != 20);
+
+        byte[] extPayload = Arrays.copyOfRange(extMsg, 2, extMsg.length);
+        int[] ei = {0};
+        @SuppressWarnings("unchecked")
+        Map<String, Object> extHandshake = (Map<String, Object>) decodeBytes(extPayload, ei);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> mDict = (Map<String, Object>) extHandshake.get("m");
+        long utMetadataId = ((Number) mDict.get("ut_metadata")).longValue();
+
+        // Request metadata piece 0
+        byte[] metaReqDict = "d8:msg_typei0e5:piecei0ee".getBytes(StandardCharsets.US_ASCII);
+        ByteBuffer metaReqBuf = ByteBuffer.allocate(4 + 1 + 1 + metaReqDict.length);
+        metaReqBuf.putInt(1 + 1 + metaReqDict.length);
+        metaReqBuf.put((byte) 20);
+        metaReqBuf.put((byte) utMetadataId);
+        metaReqBuf.put(metaReqDict);
+        out.write(metaReqBuf.array());
+        out.flush();
+
+        // Receive metadata
+        byte[] metaDataMsg;
+        do { metaDataMsg = readPeerMessage(in); } while (metaDataMsg == null || metaDataMsg[0] != 20 || metaDataMsg[1] != 1);
+
+        int[] metaIdx = {2};
+        @SuppressWarnings("unchecked")
+        Map<String, Object> metaDict = (Map<String, Object>) decodeBytes(metaDataMsg, metaIdx);
+
+        byte[] infoBytes = Arrays.copyOfRange(metaDataMsg, metaIdx[0], metaDataMsg.length);
+        int[] infoIdx = {0};
+        @SuppressWarnings("unchecked")
+        Map<String, Object> info = (Map<String, Object>) decodeBytes(infoBytes, infoIdx);
+
+        long totalLength = (Long) info.get("length");
+        long pieceLength = (Long) info.get("piece length");
+        byte[] pieces = (byte[]) info.get("pieces");
+
+        // Send interested
+        sendPeerMessage(out, 2, new byte[0]);
+
+        // Wait for unchoke
+        do { msg = readPeerMessage(in); } while (msg == null || msg[0] != 1);
+
+        // Download piece
+        int numPieces = pieces.length / 20;
+        long actualPieceLen = (pieceIndex == numPieces - 1)
+            ? totalLength - (long) pieceIndex * pieceLength
+            : pieceLength;
+        byte[] pieceData = new byte[(int) actualPieceLen];
+
+        int blockSize = 16 * 1024;
+        int numBlocks = (int) ((actualPieceLen + blockSize - 1) / blockSize);
+
+        for (int blockIdx = 0; blockIdx < numBlocks; blockIdx++) {
+          int begin = blockIdx * blockSize;
+          int blockLen = (int) Math.min(blockSize, actualPieceLen - begin);
+
+          ByteBuffer reqPayload = ByteBuffer.allocate(12);
+          reqPayload.putInt(pieceIndex);
+          reqPayload.putInt(begin);
+          reqPayload.putInt(blockLen);
+          sendPeerMessage(out, 6, reqPayload.array());
+
+          byte[] pieceMsg;
+          do { pieceMsg = readPeerMessage(in); } while (pieceMsg == null || pieceMsg[0] != 7);
+
+          int dataOffset = ByteBuffer.wrap(pieceMsg, 5, 4).getInt();
+          System.arraycopy(pieceMsg, 9, pieceData, dataOffset, pieceMsg.length - 9);
+        }
+
+        // Verify piece
+        byte[] expectedHash = Arrays.copyOfRange(pieces, pieceIndex * 20, pieceIndex * 20 + 20);
+        if (!Arrays.equals(expectedHash, sha1Hash(pieceData))) {
+          throw new RuntimeException("Piece hash mismatch for piece " + pieceIndex);
+        }
+
+        Files.write(Path.of(outputPath), pieceData);
+        System.out.println("Piece " + pieceIndex + " downloaded to " + outputPath + ".");
+      }
     } else if ("magnet_parse".equals(command)) {
       String magnetLink = args[1];
       // Strip "magnet:?" prefix
