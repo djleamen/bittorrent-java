@@ -88,7 +88,7 @@ public class BencodeDecoder {
       index[0] += length;
       return str;
     } else {
-      throw new RuntimeException("Only strings are supported at the moment");
+      throw new RuntimeException("Unexpected token at index " + index[0]);
     }
   }
 }
